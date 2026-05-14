@@ -3,6 +3,20 @@ session_start();
 require 'db.php';
 require 'functions.php';
 
+function garantirTabelaMensagensLidas($pdo) {
+    static $ok = false;
+    if ($ok) return;
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mensagens_lidas (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        mensagem_id INT NOT NULL,
+        user_id INT NOT NULL,
+        lido_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_msg_user (mensagem_id, user_id),
+        INDEX idx_user_lido (user_id, lido_em DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $ok = true;
+}
+
 if (!isset($_SESSION['user_id'])) {
     redirecionar('index.php');
 }
@@ -401,18 +415,28 @@ if (isset($_GET['pedido'])) {
                                WHERE m.contacto_id = ? ORDER BY m.criado_em ASC");
         $stmt->execute([$id]);
         $mensagens = $stmt->fetchAll();
-        $pdo->prepare("INSERT IGNORE INTO mensagens_lidas (mensagem_id, user_id)
-                       SELECT m.id, ? FROM mensagens_contacto m
-                       WHERE m.contacto_id = ? AND m.user_id <> ?")->execute([$user_id, $id, $user_id]);
+        try {
+            garantirTabelaMensagensLidas($pdo);
+            $pdo->prepare("INSERT IGNORE INTO mensagens_lidas (mensagem_id, user_id)
+                           SELECT m.id, ? FROM mensagens_contacto m
+                           WHERE m.contacto_id = ? AND m.user_id <> ?")->execute([$user_id, $id, $user_id]);
+        } catch (Exception $e) {
+            error_log('Falha ao marcar mensagens como lidas: ' . $e->getMessage());
+        }
         if (!empty($mensagens)) {
             $ids = array_column($mensagens, 'id');
             $placeholders = implode(',', array_fill(0, count($ids), '?'));
             $sql = "SELECT mensagem_id, COUNT(*) AS c FROM mensagens_lidas WHERE mensagem_id IN ($placeholders) AND user_id <> ? GROUP BY mensagem_id";
-            $stmt = $pdo->prepare($sql);
-            $params = $ids;
-            $params[] = $user_id;
-            $stmt->execute($params);
-            foreach ($stmt->fetchAll() as $r) $mensagens_lidas_por_outros[$r['mensagem_id']] = (int)$r['c'];
+            try {
+                garantirTabelaMensagensLidas($pdo);
+                $stmt = $pdo->prepare($sql);
+                $params = $ids;
+                $params[] = $user_id;
+                $stmt->execute($params);
+                foreach ($stmt->fetchAll() as $r) $mensagens_lidas_por_outros[$r['mensagem_id']] = (int)$r['c'];
+            } catch (Exception $e) {
+                error_log('Falha ao ler estado de mensagens lidas: ' . $e->getMessage());
+            }
         }
     } else {
         $pedido_atual = null;
