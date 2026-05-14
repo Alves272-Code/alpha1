@@ -354,12 +354,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ==================== DADOS PARA VISTA ====================
 if ($is_admin) {
     $pedidos = $pdo->query("SELECT c.*, u.nome AS user_nome,
-        (SELECT COUNT(*) FROM mensagens_contacto WHERE contacto_id = c.id) AS msgs
+        (SELECT COUNT(*) FROM mensagens_contacto WHERE contacto_id = c.id) AS msgs,
+        (SELECT MAX(criado_em) FROM mensagens_contacto WHERE contacto_id = c.id) AS ultima_msg_em,
+        (SELECT user_id FROM mensagens_contacto WHERE contacto_id = c.id ORDER BY criado_em DESC, id DESC LIMIT 1) AS ultima_msg_user_id
         FROM contactos c LEFT JOIN utilizadores u ON c.user_id = u.id
         ORDER BY c.status ASC, c.criado_em DESC")->fetchAll();
 } else {
     $stmt = $pdo->prepare("SELECT c.*,
-        (SELECT COUNT(*) FROM mensagens_contacto WHERE contacto_id = c.id) AS msgs
+        (SELECT COUNT(*) FROM mensagens_contacto WHERE contacto_id = c.id) AS msgs,
+        (SELECT MAX(criado_em) FROM mensagens_contacto WHERE contacto_id = c.id) AS ultima_msg_em,
+        (SELECT user_id FROM mensagens_contacto WHERE contacto_id = c.id ORDER BY criado_em DESC, id DESC LIMIT 1) AS ultima_msg_user_id
         FROM contactos c WHERE c.user_id = ? OR c.email = ?
         ORDER BY c.criado_em DESC");
     $stmt->execute([$user_id, $_SESSION['user_email']]);
@@ -376,6 +380,8 @@ $pedido_atual = null;
 $mensagens    = [];
 if (isset($_GET['pedido'])) {
     $id = $_GET['pedido'];
+    if (!isset($_SESSION['pedidos_lidos'])) $_SESSION['pedidos_lidos'] = [];
+    $_SESSION['pedidos_lidos'][$id] = date('Y-m-d H:i:s');
     $stmt = $pdo->prepare("SELECT * FROM contactos WHERE id = ?");
     $stmt->execute([$id]);
     $pedido_atual = $stmt->fetch();
@@ -478,12 +484,21 @@ if (isset($_GET['pedido'])) {
                 </div>
                 <div class="grid gap-4">
                     <?php foreach($pedidos as $p): ?>
+                    <?php
+                        $ultimoAutor = (int)($p['ultima_msg_user_id'] ?? 0);
+                        $ultimoMomento = $p['ultima_msg_em'] ?? null;
+                        $lidoEm = $_SESSION['pedidos_lidos'][$p['id']] ?? null;
+                        $naoLido = $ultimoMomento && $ultimoAutor !== (int)$user_id && (!$lidoEm || strtotime($ultimoMomento) > strtotime($lidoEm));
+                    ?>
                     <div x-show="matchesPedido('<?= htmlspecialchars(strtolower($p['assunto']), ENT_QUOTES) ?>')" class="bg-white rounded-xl shadow p-5 border-l-4 <?= $p['status'] === 'aberto' ? 'border-green-500' : 'border-gray-300' ?> hover:shadow-md transition">
                         <div class="flex flex-col sm:flex-row justify-between">
                             <div>
                                 <div class="flex gap-2 items-center mb-1">
                                     <span class="font-mono bg-gray-100 px-2 py-0.5 rounded text-sm">#<?=$p['id']?></span>
                                     <span class="text-xs <?=$p['status']==='aberto'?'bg-green-100 text-green-800':'bg-gray-100 text-gray-600'?> px-2 py-0.5 rounded-full"><?=$p['status']?></span>
+                                    <?php if($naoLido): ?>
+                                        <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Não lido</span>
+                                    <?php endif; ?>
                                     <?php if($is_admin): ?><span class="text-sm text-gray-500"><?=htmlspecialchars($p['user_nome']??'Visitante')?></span><?php endif; ?>
                                 </div>
                                 <p class="font-semibold"><?=htmlspecialchars($p['assunto'])?></p>
@@ -873,6 +888,7 @@ if (isset($_GET['pedido'])) {
                         <i class="fas fa-spinner fa-spin" x-show="enviando"></i>
                     </button>
                 </div>
+                <p x-show="enviando" class="text-xs text-gray-500 mt-2">A enviar mensagem...</p>
             </form>
         </div>
     </div>

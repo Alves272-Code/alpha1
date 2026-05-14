@@ -157,6 +157,13 @@ function chat(contactoId) {
             this.enviando = true;
             let formData = new FormData(this.$el);
             formData.append('ajax', '1');
+            const texto = (this.$refs.mensagemInput.value || '').trim();
+            const tempId = 'tmp_' + Date.now();
+            if (texto) {
+                const pendingHtml = `<div id="${tempId}" class="flex justify-end opacity-70"><div class="chat-msg bg-indigo-400 text-white rounded-t-2xl rounded-bl-2xl p-3"><div class="text-xs text-indigo-100 mb-1">A enviar... • agora</div><div>${texto.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div></div></div>`;
+                this.$refs.msgContainer.insertAdjacentHTML('beforeend', pendingHtml);
+                this.scroll();
+            }
             try {
                 let resp = await fetch('dashboard.php', { method: 'POST', body: formData, credentials: 'same-origin' });
                 if (!resp.ok) throw new Error('Erro HTTP: ' + resp.status);
@@ -169,8 +176,12 @@ function chat(contactoId) {
                     throw new Error('Resposta do servidor inválida'); 
                 }
                 if (data.erro) { 
+                    const tmpEl = document.getElementById(tempId);
+                    if (tmpEl) tmpEl.remove();
                     alert(data.erro); 
                 } else {
+                    const tmpEl = document.getElementById(tempId);
+                    if (tmpEl) tmpEl.remove();
                     this.$refs.msgContainer.insertAdjacentHTML('beforeend', data.html);
                     this.scroll();
                     this.$refs.mensagemInput.value = '';
@@ -179,6 +190,8 @@ function chat(contactoId) {
                     }
                 }
             } catch (e) { 
+                const tmpEl = document.getElementById(tempId);
+                if (tmpEl) tmpEl.remove();
                 console.error(e); 
                 alert('Erro de conexão.'); 
             }
