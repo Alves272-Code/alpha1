@@ -100,6 +100,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirecionar('dashboard.php');
     }
 
+    if (isset($_POST['atualizar_perfil'])) {
+        $novo_nome = trim($_POST['nome'] ?? '');
+        $novo_email = filter_input(INPUT_POST, 'email', FILTER_SANITIZE_EMAIL);
+
+        if ($novo_nome === '' || !$novo_email || !filter_var($novo_email, FILTER_VALIDATE_EMAIL)) {
+            flash('erro', 'Nome e email válidos são obrigatórios.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+
+        $stmt = $pdo->prepare("SELECT id FROM utilizadores WHERE email = ? AND id <> ?");
+        $stmt->execute([$novo_email, $user_id]);
+        if ($stmt->fetch()) {
+            flash('erro', 'Este email já está associado a outra conta.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+
+        $stmt = $pdo->prepare("UPDATE utilizadores SET nome = ?, email = ? WHERE id = ?");
+        $stmt->execute([$novo_nome, $novo_email, $user_id]);
+        $_SESSION['user_nome'] = $novo_nome;
+        $_SESSION['user_email'] = $novo_email;
+        flash('sucesso', 'Perfil atualizado com sucesso.');
+        redirecionar('dashboard.php?aba=perfil');
+    }
+
+    if (isset($_POST['alterar_password'])) {
+        $atual = $_POST['password_atual'] ?? '';
+        $nova = $_POST['password_nova'] ?? '';
+        $confirmar = $_POST['password_confirmar'] ?? '';
+
+        if ($atual === '' || $nova === '' || $confirmar === '') {
+            flash('erro', 'Preencha os três campos de password.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+        if (strlen($nova) < 8) {
+            flash('erro', 'A nova password deve ter pelo menos 8 caracteres.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+        if ($nova !== $confirmar) {
+            flash('erro', 'A confirmação da nova password não coincide.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+
+        $stmt = $pdo->prepare("SELECT password FROM utilizadores WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $u = $stmt->fetch();
+        if (!$u || !password_verify($atual, $u['password'])) {
+            flash('erro', 'Password atual incorreta.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+
+        $nova_hash = password_hash($nova, PASSWORD_DEFAULT);
+        $pdo->prepare("UPDATE utilizadores SET password = ? WHERE id = ?")->execute([$nova_hash, $user_id]);
+        flash('sucesso', 'Password alterada com sucesso.');
+        redirecionar('dashboard.php?aba=perfil');
+    }
+
     // --- Pedidos ---
     if (isset($_POST['novo_pedido'])) {
         $assunto  = trim($_POST['assunto'] ?? '');
@@ -310,6 +366,12 @@ if ($is_admin) {
     $pedidos = $stmt->fetchAll();
 }
 
+$total_pedidos = count($pedidos);
+$pedidos_abertos = count(array_filter($pedidos, function ($p) {
+    return (isset($p['status']) ? $p['status'] : '') === 'aberto';
+}));
+$pedidos_fechados = max(0, $total_pedidos - $pedidos_abertos);
+
 $pedido_atual = null;
 $mensagens    = [];
 if (isset($_GET['pedido'])) {
@@ -389,8 +451,25 @@ if (isset($_GET['pedido'])) {
         <!-- Aba Pedidos -->
         <div x-show="aba === 'pedidos'">
             <?php if (!$pedido_atual): ?>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="bg-white rounded-xl shadow p-4">
+                        <p class="text-sm text-gray-500">Total de pedidos</p>
+                        <p class="text-2xl font-bold text-indigo-700"><?= $total_pedidos ?></p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow p-4">
+                        <p class="text-sm text-gray-500">Abertos</p>
+                        <p class="text-2xl font-bold text-green-600"><?= $pedidos_abertos ?></p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow p-4">
+                        <p class="text-sm text-gray-500">Fechados</p>
+                        <p class="text-2xl font-bold text-gray-600"><?= $pedidos_fechados ?></p>
+                    </div>
+                </div>
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                     <h2 class="text-2xl font-bold"><?= $is_admin ? 'Centro de Pedidos' : 'Meus Pedidos' ?></h2>
+                    <div class="flex gap-2 w-full sm:w-auto">
+                        <input type="text" x-model="filtroPedidos" placeholder="Pesquisar por assunto..." class="border rounded-lg px-3 py-2 w-full sm:w-64">
+                    </div>
                     <?php if (!$is_admin): ?>
                         <button @click="aba = 'novo'" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">
                             <i class="fas fa-plus mr-1"></i> Novo Pedido
@@ -399,7 +478,7 @@ if (isset($_GET['pedido'])) {
                 </div>
                 <div class="grid gap-4">
                     <?php foreach($pedidos as $p): ?>
-                    <div class="bg-white rounded-xl shadow p-5 border-l-4 <?= $p['status'] === 'aberto' ? 'border-green-500' : 'border-gray-300' ?> hover:shadow-md transition">
+                    <div x-show="matchesPedido('<?= htmlspecialchars(strtolower($p['assunto']), ENT_QUOTES) ?>')" class="bg-white rounded-xl shadow p-5 border-l-4 <?= $p['status'] === 'aberto' ? 'border-green-500' : 'border-gray-300' ?> hover:shadow-md transition">
                         <div class="flex flex-col sm:flex-row justify-between">
                             <div>
                                 <div class="flex gap-2 items-center mb-1">
@@ -457,11 +536,45 @@ if (isset($_GET['pedido'])) {
         </div>
 
         <!-- Aba Perfil -->
-        <div x-show="aba === 'perfil'" class="max-w-lg mx-auto bg-white p-6 rounded-2xl shadow">
-            <h2 class="text-2xl font-bold mb-4">Perfil</h2>
-            <p><strong>Nome:</strong> <?=htmlspecialchars($_SESSION['user_nome'])?></p>
-            <p><strong>Email:</strong> <?=htmlspecialchars($_SESSION['user_email'])?></p>
-            <p class="text-sm text-gray-500 mt-4">Edição de perfil em desenvolvimento.</p>
+        <div x-show="aba === 'perfil'" class="max-w-3xl mx-auto space-y-6">
+            <div class="bg-white p-6 rounded-2xl shadow">
+                <h2 class="text-2xl font-bold mb-4">Perfil</h2>
+                <form method="POST" action="dashboard.php" class="space-y-4">
+                    <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
+                    <div>
+                        <label class="block font-medium mb-1">Nome</label>
+                        <input type="text" name="nome" required value="<?=htmlspecialchars($_SESSION['user_nome'])?>" class="w-full border p-3 rounded-xl">
+                    </div>
+                    <div>
+                        <label class="block font-medium mb-1">Email</label>
+                        <input type="email" name="email" required value="<?=htmlspecialchars($_SESSION['user_email'])?>" class="w-full border p-3 rounded-xl">
+                    </div>
+                    <button type="submit" name="atualizar_perfil" class="bg-indigo-600 text-white px-6 py-2 rounded-xl hover:bg-indigo-700 transition">
+                        Guardar alterações
+                    </button>
+                </form>
+            </div>
+            <div class="bg-white p-6 rounded-2xl shadow">
+                <h3 class="text-xl font-semibold mb-4">Segurança</h3>
+                <form method="POST" action="dashboard.php" class="space-y-4">
+                    <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
+                    <div>
+                        <label class="block font-medium mb-1">Password atual</label>
+                        <input type="password" name="password_atual" required class="w-full border p-3 rounded-xl">
+                    </div>
+                    <div>
+                        <label class="block font-medium mb-1">Nova password</label>
+                        <input type="password" name="password_nova" minlength="8" required class="w-full border p-3 rounded-xl">
+                    </div>
+                    <div>
+                        <label class="block font-medium mb-1">Confirmar nova password</label>
+                        <input type="password" name="password_confirmar" minlength="8" required class="w-full border p-3 rounded-xl">
+                    </div>
+                    <button type="submit" name="alterar_password" class="bg-gray-900 text-white px-6 py-2 rounded-xl hover:bg-black transition">
+                        Alterar password
+                    </button>
+                </form>
+            </div>
         </div>
 
         <!-- Aba Artigos (admin) -->
