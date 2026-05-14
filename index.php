@@ -116,6 +116,21 @@ $abrirModalRegisto = !empty($erro_registo) ? 'true' : 'false';
 
 // Artigos publicados (blog)
 $artigos = $pdo->query("SELECT id, titulo, imagem, criado_em FROM artigos WHERE publicado = 1 ORDER BY criado_em DESC LIMIT 3")->fetchAll();
+$notificacoes_home = [];
+if (!empty($_SESSION['user_id'])) {
+    $uid = (int)$_SESSION['user_id'];
+    $stmt = $pdo->prepare("SELECT c.id, c.assunto,
+      (SELECT user_id FROM mensagens_contacto WHERE contacto_id = c.id ORDER BY criado_em DESC, id DESC LIMIT 1) AS ultimo_user
+      FROM contactos c
+      WHERE c.user_id = ? AND c.status = 'aberto'
+      ORDER BY c.criado_em DESC LIMIT 5");
+    $stmt->execute([$uid]);
+    foreach ($stmt->fetchAll() as $row) {
+        if (!empty($row['ultimo_user']) && (int)$row['ultimo_user'] !== $uid) {
+            $notificacoes_home[] = "Nova resposta no pedido #{$row['id']} ({$row['assunto']}).";
+        }
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="pt">
@@ -197,6 +212,30 @@ $artigos = $pdo->query("SELECT id, titulo, imagem, criado_em FROM artigos WHERE 
 </div>
 
 <!-- HERO SWIPER -->
+<?php if (!empty($_SESSION['user_id'])): ?>
+<section class="max-w-6xl mx-auto px-4 pt-6">
+    <div class="bg-white rounded-2xl shadow p-4 md:p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+            <p class="text-sm text-gray-500">Sessão iniciada como</p>
+            <p class="font-semibold text-indigo-700"><?= htmlspecialchars($_SESSION['user_nome']) ?></p>
+            <?php if (!empty($notificacoes_home)): ?>
+                <p class="text-sm text-amber-700 mt-1"><i class="fas fa-bell mr-1"></i><?= count($notificacoes_home) ?> notificação(ões) nova(s)</p>
+            <?php endif; ?>
+        </div>
+        <div class="flex gap-2">
+            <a href="dashboard.php" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">Ir ao Painel</a>
+            <a href="dashboard.php?aba=novo" class="bg-white border px-4 py-2 rounded-lg hover:bg-gray-50">Criar Pedido</a>
+        </div>
+    </div>
+    <?php if (!empty($notificacoes_home)): ?>
+        <div class="mt-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3">
+            <?php foreach ($notificacoes_home as $n): ?>
+                <p class="text-sm">• <?= htmlspecialchars($n) ?></p>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
+</section>
+<?php endif; ?>
 <section class="swiper w-full h-[400px]">
     <div class="swiper-wrapper">
         <div class="swiper-slide"><img src="https://picsum.photos/id/104/1200/500" loading="lazy" class="w-full h-full object-cover" alt="Slide 1"></div>
