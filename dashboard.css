@@ -1,0 +1,14 @@
+[x-cloak] { display: none !important; }
+.chat-msg { max-width: 85%; word-wrap: break-word; }
+.fade-in { animation: fadeIn 0.3s; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } }
+.drop-zone { border: 2px dashed #d1d5db; border-radius: 0.75rem; transition: all 0.2s; }
+.drop-zone:hover, .drop-zone.drag { border-color: #4f46e5; background: #eef2ff; }
+.sidebar-mobile { transition: transform 0.3s ease; }
+.gallery-thumb { transition: transform 0.2s, box-shadow 0.2s; }
+.gallery-thumb:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.gallery-thumb.sortable-ghost { opacity: 0.4; }
+.gallery-thumb.sortable-chosen { box-shadow: 0 0 0 2px #4f46e5; }
+.gallery-thumb.sortable-drag { opacity: 0.8; transform: rotate(2deg); }
+.preview-image { width: 100px; height: 100px; object-fit: cover; border-radius: 0.5rem; }
+.capa-badge { position: absolute; top: 0.5rem; right: 0.5rem; background: #fbbf24; color: #78350f; border-radius: 9999px; padding: 0.25rem 0.5rem; font-size: 0.75rem; font-weight: bold; z-index: 10; }
