@@ -419,6 +419,7 @@ $pedidos_abertos = count(array_filter($pedidos, function ($p) {
 }));
 $pedidos_fechados = max(0, $total_pedidos - $pedidos_abertos);
 $templates_resposta = [];
+$notificacoesTopo = [];
 if ($is_admin) {
     try {
         $stmt = $pdo->prepare("SELECT id, titulo, conteudo FROM templates_resposta WHERE user_id = ? AND ativo = 1 ORDER BY id DESC");
@@ -426,6 +427,11 @@ if ($is_admin) {
         $templates_resposta = $stmt->fetchAll();
     } catch (Exception $e) {
         error_log('Falha ao carregar templates: ' . $e->getMessage());
+    }
+}
+foreach ($pedidos as $pp) {
+    if (($pp['status'] ?? '') === 'aberto' && !empty($pp['ultima_msg_em']) && (time()-strtotime($pp['ultima_msg_em'])) > 4*3600) {
+        $notificacoesTopo[] = "Pedido #{$pp['id']} está sem resposta há mais de 4h.";
     }
 }
 
@@ -527,12 +533,20 @@ if (isset($_GET['pedido'])) {
         <!-- Mensagens flash -->
         <?php foreach (['sucesso', 'erro', 'sucesso_artigo', 'erro_artigo'] as $tipo): ?>
             <?php $msg = flash($tipo); if ($msg): ?>
-                <div class="mb-4 p-3 rounded-lg <?= strpos($tipo, 'erro') !== false ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-green-100 text-green-700 border border-green-200' ?> flex justify-between items-center">
+                <div class="mb-4 p-3 rounded-lg shadow <?= strpos($tipo, 'erro') !== false ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-green-100 text-green-700 border border-green-200' ?> flex justify-between items-center toast-msg">
                     <span><?= htmlspecialchars($msg) ?></span>
                     <button @click="$event.target.parentElement.remove()" class="text-lg">&times;</button>
                 </div>
             <?php endif; ?>
         <?php endforeach; ?>
+        <?php if(!empty($notificacoesTopo)): ?>
+            <div class="bg-white border rounded-xl p-4 mb-4">
+                <h3 class="font-semibold mb-2"><i class="fas fa-bell text-amber-500 mr-1"></i>Centro de Notificações</h3>
+                <ul class="text-sm text-gray-700 list-disc pl-5 space-y-1">
+                    <?php foreach($notificacoesTopo as $n): ?><li><?=htmlspecialchars($n)?></li><?php endforeach; ?>
+                </ul>
+            </div>
+        <?php endif; ?>
 
         <!-- Aba Pedidos -->
         <div x-show="aba === 'pedidos'">
@@ -582,6 +596,12 @@ if (isset($_GET['pedido'])) {
                                     <?php if($is_admin): ?><span class="text-sm text-gray-500"><?=htmlspecialchars($p['user_nome']??'Visitante')?></span><?php endif; ?>
                                 </div>
                                 <p class="font-semibold"><?=htmlspecialchars($p['assunto'])?></p>
+                                <?php
+                                  $estadoExplicito = 'Aguardando resposta da equipa';
+                                  if (!empty($p['ultima_msg_user_id']) && (int)$p['ultima_msg_user_id'] !== (int)$user_id) $estadoExplicito = 'Aguardando sua resposta';
+                                  if ($is_admin) $estadoExplicito = ((int)($p['ultima_msg_user_id'] ?? 0) === (int)$user_id) ? 'Aguardando cliente' : 'Aguardando equipa';
+                                ?>
+                                <p class="text-xs text-indigo-700 mt-1"><?= $estadoExplicito ?></p>
                                 <p class="text-sm text-gray-600 truncate max-w-xs"><?=htmlspecialchars(substr($p['mensagem'],0,80))?>...</p>
                                 <p class="text-xs text-gray-400 mt-1"><?=$p['msgs']?> mensagens • <?=date('d/m/Y',strtotime($p['criado_em']))?></p>
                                 <?php if($p['status']==='aberto' && !empty($p['ultima_msg_em']) && (time()-strtotime($p['ultima_msg_em'])) > 4*3600): ?>
@@ -939,6 +959,11 @@ if (isset($_GET['pedido'])) {
                     </a>
                 </div>
             </div>
+            <div class="bg-indigo-50 border-b px-4 py-2 text-xs text-indigo-800 flex gap-3 overflow-x-auto">
+                <span>✅ Criado: <?=date('d/m H:i', strtotime($pedido_atual['criado_em']))?></span>
+                <?php if(!empty($pedido_atual['parent_id'])): ?><span>🔁 Reaberto</span><?php endif; ?>
+                <?php if(($pedido_atual['status'] ?? '') === 'fechado'): ?><span>🔒 Fechado</span><?php else: ?><span>💬 Em conversa</span><?php endif; ?>
+            </div>
             <div class="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50" x-ref="msgContainer">
                 <?php foreach($mensagens as $msg):
                     $meu = (!$is_admin && $msg['user_id'] == $user_id) || ($is_admin && ($msg['autor_role']??'') === 'admin' && $msg['user_id'] == $user_id);
@@ -972,7 +997,7 @@ if (isset($_GET['pedido'])) {
                 </div>
                 <?php endforeach; ?>
             </div>
-            <form @submit.prevent="enviarMensagem" enctype="multipart/form-data" class="p-4 bg-white border-t">
+            <form @submit.prevent="enviarMensagem" enctype="multipart/form-data" class="p-4 bg-white border-t sticky bottom-0">
                 <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
                 <input type="hidden" name="contacto_id" value="<?=$pedido_atual['id']?>">
                 <div class="flex gap-2 items-end">
@@ -1008,14 +1033,14 @@ if (isset($_GET['pedido'])) {
                             </div>
                         </div>
                     </div>
-                    <button type="submit" class="bg-indigo-600 text-white rounded-full p-3 w-12 h-12 flex items-center justify-center flex-shrink-0 hover:bg-indigo-700 transition" :disabled="enviando">
-                        <i class="fas fa-paper-plane" x-show="!enviando"></i>
-                        <i class="fas fa-spinner fa-spin" x-show="enviando"></i>
+                    <button type="submit" class="bg-indigo-600 text-white rounded-xl px-5 py-4 md:py-3 min-h-[52px] flex items-center justify-center flex-shrink-0 hover:bg-indigo-700 transition text-base font-semibold" :disabled="enviando">
+                        <span x-show="!enviando">Enviar</span>
+                        <span x-show="enviando"><i class="fas fa-spinner fa-spin mr-1"></i> Enviando</span>
                     </button>
                 </div>
                 <?php if(!$is_admin): ?>
-                    <div class="mt-3 flex justify-end">
-                        <a href="dashboard.php" class="text-sm text-indigo-600 hover:underline"><i class="fas fa-arrow-left mr-1"></i>Voltar à lista de pedidos</a>
+                    <div class="mt-3 flex justify-end md:hidden">
+                        <a href="dashboard.php" class="text-sm text-indigo-600 hover:underline">Voltar à lista de pedidos</a>
                     </div>
                 <?php endif; ?>
             </form>
@@ -1054,6 +1079,9 @@ if (isset($_GET['pedido'])) {
 
 <script>
 window.abaInicial = '<?= $aba_inicial ?>';
+setTimeout(() => {
+  document.querySelectorAll('.toast-msg').forEach(el => el.remove());
+}, 4500);
 </script>
 <script src="dashboard.js"></script>
 </body>
