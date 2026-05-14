@@ -367,7 +367,9 @@ if ($is_admin) {
 }
 
 $total_pedidos = count($pedidos);
-$pedidos_abertos = count(array_filter($pedidos, fn($p) => ($p['status'] ?? '') === 'aberto'));
+$pedidos_abertos = count(array_filter($pedidos, function ($p) {
+    return (isset($p['status']) ? $p['status'] : '') === 'aberto';
+}));
 $pedidos_fechados = max(0, $total_pedidos - $pedidos_abertos);
 
 $pedido_atual = null;
