@@ -59,6 +59,17 @@ function inicializarBaseDados($pdo) {
         INDEX idx_contacto (contacto_id, criado_em ASC)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mensagens_lidas (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        mensagem_id INT NOT NULL,
+        user_id INT NOT NULL,
+        lido_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_msg_user (mensagem_id, user_id),
+        FOREIGN KEY (mensagem_id) REFERENCES mensagens_contacto(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES utilizadores(id) ON DELETE CASCADE,
+        INDEX idx_user_lido (user_id, lido_em DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     $pdo->exec("CREATE TABLE IF NOT EXISTS artigos (
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,

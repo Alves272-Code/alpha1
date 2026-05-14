@@ -59,6 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax']) && $_POST['aj
         
         $stmt = $pdo->prepare("INSERT INTO mensagens_contacto (contacto_id, user_id, mensagem, anexo) VALUES (?, ?, ?, ?)");
         $stmt->execute([$contacto_id, $user_id, $mensagem, $anexo]);
+        $mensagem_id = $pdo->lastInsertId();
         
         if ($is_admin) {
             $pdo->prepare("UPDATE contactos SET status = 'aberto' WHERE id = ? AND status = 'fechado'")->execute([$contacto_id]);
@@ -67,6 +68,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax']) && $_POST['aj
         $stmt = $pdo->prepare("SELECT nome, role FROM utilizadores WHERE id = ?");
         $stmt->execute([$user_id]);
         $autor = $stmt->fetch() ?: ['nome' => 'Sistema', 'role' => 'user'];
+
+        $stmt = $pdo->prepare("SELECT c.email, u.email AS owner_email FROM contactos c LEFT JOIN utilizadores u ON c.user_id = u.id WHERE c.id = ?");
+        $stmt->execute([$contacto_id]);
+        $dest = $stmt->fetch();
+        $destinoEmail = $is_admin ? ($dest['owner_email'] ?: $dest['email']) : 'suporte@meusite.local';
+        if (!empty($destinoEmail) && function_exists('mail')) {
+            @mail($destinoEmail, "Nova resposta no pedido #$contacto_id", "Tem uma nova mensagem no seu pedido.");
+        }
         
         $msg_html = '<div class="flex justify-end fade-in"><div class="chat-msg bg-indigo-500 text-white rounded-t-2xl rounded-bl-2xl p-3">';
         $msg_html .= '<div class="text-xs text-indigo-200 mb-1">' . htmlspecialchars($autor['nome']) . ' • ' . date('d/m H:i') . '</div>';
@@ -82,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax']) && $_POST['aj
         }
         $msg_html .= '</div></div>';
         
-        echo json_encode(['html' => $msg_html]);
+        echo json_encode(['html' => $msg_html, 'mensagem_id' => $mensagem_id]);
         
     } catch (Exception $e) {
         echo json_encode([
@@ -378,6 +387,7 @@ $pedidos_fechados = max(0, $total_pedidos - $pedidos_abertos);
 
 $pedido_atual = null;
 $mensagens    = [];
+$mensagens_lidas_por_outros = [];
 if (isset($_GET['pedido'])) {
     $id = $_GET['pedido'];
     if (!isset($_SESSION['pedidos_lidos'])) $_SESSION['pedidos_lidos'] = [];
@@ -391,6 +401,19 @@ if (isset($_GET['pedido'])) {
                                WHERE m.contacto_id = ? ORDER BY m.criado_em ASC");
         $stmt->execute([$id]);
         $mensagens = $stmt->fetchAll();
+        $pdo->prepare("INSERT IGNORE INTO mensagens_lidas (mensagem_id, user_id)
+                       SELECT m.id, ? FROM mensagens_contacto m
+                       WHERE m.contacto_id = ? AND m.user_id <> ?")->execute([$user_id, $id, $user_id]);
+        if (!empty($mensagens)) {
+            $ids = array_column($mensagens, 'id');
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $sql = "SELECT mensagem_id, COUNT(*) AS c FROM mensagens_lidas WHERE mensagem_id IN ($placeholders) AND user_id <> ? GROUP BY mensagem_id";
+            $stmt = $pdo->prepare($sql);
+            $params = $ids;
+            $params[] = $user_id;
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll() as $r) $mensagens_lidas_por_outros[$r['mensagem_id']] = (int)$r['c'];
+        }
     } else {
         $pedido_atual = null;
     }
@@ -504,6 +527,9 @@ if (isset($_GET['pedido'])) {
                                 <p class="font-semibold"><?=htmlspecialchars($p['assunto'])?></p>
                                 <p class="text-sm text-gray-600 truncate max-w-xs"><?=htmlspecialchars(substr($p['mensagem'],0,80))?>...</p>
                                 <p class="text-xs text-gray-400 mt-1"><?=$p['msgs']?> mensagens • <?=date('d/m/Y',strtotime($p['criado_em']))?></p>
+                                <?php if($p['status']==='aberto' && !empty($p['ultima_msg_em']) && (time()-strtotime($p['ultima_msg_em'])) > 4*3600): ?>
+                                    <p class="text-xs text-amber-600 mt-1"><i class="fas fa-clock"></i> SLA alerta: sem resposta há mais de 4h</p>
+                                <?php endif; ?>
                             </div>
                             <div class="flex gap-2 mt-3 sm:mt-0 items-center">
                                 <a href="?pedido=<?=$p['id']?>" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600 transition">Abrir</a>
@@ -804,7 +830,7 @@ if (isset($_GET['pedido'])) {
 
 <!-- Chat (modal) -->
 <?php if ($pedido_atual): ?>
-<div x-data="chat(<?= $pedido_atual['id'] ?>)">
+<div x-data="chat(<?= $pedido_atual['id'] ?>)" x-init="init()">
     <div x-show="!minimizado" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-2 md:p-4">
         <div class="bg-white rounded-2xl w-full max-w-3xl h-[95vh] md:h-[85vh] flex flex-col shadow-2xl">
             <div class="bg-gradient-to-r from-indigo-600 to-indigo-700 text-white p-4 flex justify-between items-center">
@@ -840,6 +866,11 @@ if (isset($_GET['pedido'])) {
                             <?=htmlspecialchars($msg['autor_nome']??'Sistema')?> • <?=date('d/m H:i',strtotime($msg['criado_em']))?>
                         </div>
                         <div><?=nl2br(htmlspecialchars($msg['mensagem']))?></div>
+                        <?php if($meu): ?>
+                            <div class="text-[11px] <?=$meu?'text-indigo-200':'text-gray-500'?> mt-1">
+                                <?= !empty($mensagens_lidas_por_outros[$msg['id']]) ? '✓✓ Lida' : '✓ Enviada' ?>
+                            </div>
+                        <?php endif; ?>
                         <?php if($msg['anexo']): ?>
                             <div class="mt-2">
                                 <?php $ext = strtolower(pathinfo($msg['anexo'], PATHINFO_EXTENSION)); ?>
@@ -864,6 +895,15 @@ if (isset($_GET['pedido'])) {
                 <div class="flex gap-2 items-end">
                     <div class="flex-1">
                         <textarea x-ref="mensagemInput" name="mensagem" rows="2" class="w-full border rounded-xl p-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Responder..." required></textarea>
+                        <div class="mt-2">
+                            <label class="text-xs text-gray-500">Resposta rápida</label>
+                            <select @change="$refs.mensagemInput.value = $event.target.value" class="w-full border rounded-lg p-2 text-sm">
+                                <option value="">Selecionar template...</option>
+                                <option>Olá! Recebemos o seu pedido e estamos a analisar. Respondemos em breve.</option>
+                                <option>Obrigado pelo contacto. Precisamos de mais detalhes para avançar com a análise.</option>
+                                <option>Pedido concluído com sucesso. Caso precise, estamos disponíveis para ajustes.</option>
+                            </select>
+                        </div>
                         <div class="mt-2" x-data="anexo()" x-ref="anexoComponent">
                             <div class="drop-zone p-2" :class="{ 'drag': arrastando }" @dragover.prevent="arrastando = true" @dragleave.prevent="arrastando = false" @drop.prevent="largar($event)">
                                 <div class="flex items-center gap-2 flex-wrap">

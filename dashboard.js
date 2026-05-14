@@ -147,6 +147,20 @@ function chat(contactoId) {
     return {
         minimizado: false,
         enviando: false,
+        lastMsgId: 0,
+        sse: null,
+        init() {
+            const msgs = this.$refs.msgContainer ? this.$refs.msgContainer.querySelectorAll('.chat-msg') : [];
+            this.lastMsgId = msgs.length;
+            this.sse = new EventSource(`dashboard_stream.php?contacto_id=${contactoId}&last_id=${this.lastMsgId}`);
+            this.sse.addEventListener('mensagem', (ev) => {
+                const d = JSON.parse(ev.data || '{}');
+                if (!d.mensagem) return;
+                const html = `<div class=\"flex justify-start\"><div class=\"chat-msg bg-white border rounded-t-2xl rounded-br-2xl shadow p-3\"><div class=\"text-xs text-gray-500 mb-1\">Nova mensagem • agora</div><div>${String(d.mensagem).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div></div></div>`;
+                this.$refs.msgContainer.insertAdjacentHTML('beforeend', html);
+                this.scroll();
+            });
+        },
         scroll() {
             this.$nextTick(() => {
                 let el = this.$refs.msgContainer;
