@@ -59,6 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax']) && $_POST['aj
         
         $stmt = $pdo->prepare("INSERT INTO mensagens_contacto (contacto_id, user_id, mensagem, anexo) VALUES (?, ?, ?, ?)");
         $stmt->execute([$contacto_id, $user_id, $mensagem, $anexo]);
+        $mensagem_id = $pdo->lastInsertId();
         
         if ($is_admin) {
             $pdo->prepare("UPDATE contactos SET status = 'aberto' WHERE id = ? AND status = 'fechado'")->execute([$contacto_id]);
@@ -67,6 +68,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax']) && $_POST['aj
         $stmt = $pdo->prepare("SELECT nome, role FROM utilizadores WHERE id = ?");
         $stmt->execute([$user_id]);
         $autor = $stmt->fetch() ?: ['nome' => 'Sistema', 'role' => 'user'];
+
+        $stmt = $pdo->prepare("SELECT c.email, u.email AS owner_email FROM contactos c LEFT JOIN utilizadores u ON c.user_id = u.id WHERE c.id = ?");
+        $stmt->execute([$contacto_id]);
+        $dest = $stmt->fetch();
+        $destinoEmail = $is_admin ? ($dest['owner_email'] ?: $dest['email']) : 'suporte@meusite.local';
+        if (!empty($destinoEmail) && function_exists('mail')) {
+            @mail($destinoEmail, "Nova resposta no pedido #$contacto_id", "Tem uma nova mensagem no seu pedido.");
+        }
         
         $msg_html = '<div class="flex justify-end fade-in"><div class="chat-msg bg-indigo-500 text-white rounded-t-2xl rounded-bl-2xl p-3">';
         $msg_html .= '<div class="text-xs text-indigo-200 mb-1">' . htmlspecialchars($autor['nome']) . ' • ' . date('d/m H:i') . '</div>';
@@ -82,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax']) && $_POST['aj
         }
         $msg_html .= '</div></div>';
         
-        echo json_encode(['html' => $msg_html]);
+        echo json_encode(['html' => $msg_html, 'mensagem_id' => $mensagem_id]);
         
     } catch (Exception $e) {
         echo json_encode([
@@ -98,6 +107,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verificarTokenCSRF($_POST['csrf_token'] ?? '')) {
         flash('erro', 'Token de segurança inválido.');
         redirecionar('dashboard.php');
+    }
+
+    if (isset($_POST['atualizar_perfil'])) {
+        $novo_nome = trim($_POST['nome'] ?? '');
+        $novo_email = filter_input(INPUT_POST, 'email', FILTER_SANITIZE_EMAIL);
+
+        if ($novo_nome === '' || !$novo_email || !filter_var($novo_email, FILTER_VALIDATE_EMAIL)) {
+            flash('erro', 'Nome e email válidos são obrigatórios.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+
+        $stmt = $pdo->prepare("SELECT id FROM utilizadores WHERE email = ? AND id <> ?");
+        $stmt->execute([$novo_email, $user_id]);
+        if ($stmt->fetch()) {
+            flash('erro', 'Este email já está associado a outra conta.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+
+        $stmt = $pdo->prepare("UPDATE utilizadores SET nome = ?, email = ? WHERE id = ?");
+        $stmt->execute([$novo_nome, $novo_email, $user_id]);
+        $_SESSION['user_nome'] = $novo_nome;
+        $_SESSION['user_email'] = $novo_email;
+        flash('sucesso', 'Perfil atualizado com sucesso.');
+        redirecionar('dashboard.php?aba=perfil');
+    }
+
+    if (isset($_POST['alterar_password'])) {
+        $atual = $_POST['password_atual'] ?? '';
+        $nova = $_POST['password_nova'] ?? '';
+        $confirmar = $_POST['password_confirmar'] ?? '';
+
+        if ($atual === '' || $nova === '' || $confirmar === '') {
+            flash('erro', 'Preencha os três campos de password.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+        if (strlen($nova) < 8) {
+            flash('erro', 'A nova password deve ter pelo menos 8 caracteres.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+        if ($nova !== $confirmar) {
+            flash('erro', 'A confirmação da nova password não coincide.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+
+        $stmt = $pdo->prepare("SELECT password FROM utilizadores WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $u = $stmt->fetch();
+        if (!$u || !password_verify($atual, $u['password'])) {
+            flash('erro', 'Password atual incorreta.');
+            redirecionar('dashboard.php?aba=perfil');
+        }
+
+        $nova_hash = password_hash($nova, PASSWORD_DEFAULT);
+        $pdo->prepare("UPDATE utilizadores SET password = ? WHERE id = ?")->execute([$nova_hash, $user_id]);
+        flash('sucesso', 'Password alterada com sucesso.');
+        redirecionar('dashboard.php?aba=perfil');
     }
 
     // --- Pedidos ---
@@ -298,22 +363,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ==================== DADOS PARA VISTA ====================
 if ($is_admin) {
     $pedidos = $pdo->query("SELECT c.*, u.nome AS user_nome,
-        (SELECT COUNT(*) FROM mensagens_contacto WHERE contacto_id = c.id) AS msgs
+        (SELECT COUNT(*) FROM mensagens_contacto WHERE contacto_id = c.id) AS msgs,
+        (SELECT MAX(criado_em) FROM mensagens_contacto WHERE contacto_id = c.id) AS ultima_msg_em,
+        (SELECT user_id FROM mensagens_contacto WHERE contacto_id = c.id ORDER BY criado_em DESC, id DESC LIMIT 1) AS ultima_msg_user_id
         FROM contactos c LEFT JOIN utilizadores u ON c.user_id = u.id
         ORDER BY c.status ASC, c.criado_em DESC")->fetchAll();
 } else {
     $stmt = $pdo->prepare("SELECT c.*,
-        (SELECT COUNT(*) FROM mensagens_contacto WHERE contacto_id = c.id) AS msgs
+        (SELECT COUNT(*) FROM mensagens_contacto WHERE contacto_id = c.id) AS msgs,
+        (SELECT MAX(criado_em) FROM mensagens_contacto WHERE contacto_id = c.id) AS ultima_msg_em,
+        (SELECT user_id FROM mensagens_contacto WHERE contacto_id = c.id ORDER BY criado_em DESC, id DESC LIMIT 1) AS ultima_msg_user_id
         FROM contactos c WHERE c.user_id = ? OR c.email = ?
         ORDER BY c.criado_em DESC");
     $stmt->execute([$user_id, $_SESSION['user_email']]);
     $pedidos = $stmt->fetchAll();
 }
 
+$total_pedidos = count($pedidos);
+$pedidos_abertos = count(array_filter($pedidos, function ($p) {
+    return (isset($p['status']) ? $p['status'] : '') === 'aberto';
+}));
+$pedidos_fechados = max(0, $total_pedidos - $pedidos_abertos);
+
 $pedido_atual = null;
 $mensagens    = [];
+$mensagens_lidas_por_outros = [];
 if (isset($_GET['pedido'])) {
     $id = $_GET['pedido'];
+    if (!isset($_SESSION['pedidos_lidos'])) $_SESSION['pedidos_lidos'] = [];
+    $_SESSION['pedidos_lidos'][$id] = date('Y-m-d H:i:s');
     $stmt = $pdo->prepare("SELECT * FROM contactos WHERE id = ?");
     $stmt->execute([$id]);
     $pedido_atual = $stmt->fetch();
@@ -323,6 +401,19 @@ if (isset($_GET['pedido'])) {
                                WHERE m.contacto_id = ? ORDER BY m.criado_em ASC");
         $stmt->execute([$id]);
         $mensagens = $stmt->fetchAll();
+        $pdo->prepare("INSERT IGNORE INTO mensagens_lidas (mensagem_id, user_id)
+                       SELECT m.id, ? FROM mensagens_contacto m
+                       WHERE m.contacto_id = ? AND m.user_id <> ?")->execute([$user_id, $id, $user_id]);
+        if (!empty($mensagens)) {
+            $ids = array_column($mensagens, 'id');
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $sql = "SELECT mensagem_id, COUNT(*) AS c FROM mensagens_lidas WHERE mensagem_id IN ($placeholders) AND user_id <> ? GROUP BY mensagem_id";
+            $stmt = $pdo->prepare($sql);
+            $params = $ids;
+            $params[] = $user_id;
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll() as $r) $mensagens_lidas_por_outros[$r['mensagem_id']] = (int)$r['c'];
+        }
     } else {
         $pedido_atual = null;
     }
@@ -389,8 +480,25 @@ if (isset($_GET['pedido'])) {
         <!-- Aba Pedidos -->
         <div x-show="aba === 'pedidos'">
             <?php if (!$pedido_atual): ?>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="bg-white rounded-xl shadow p-4">
+                        <p class="text-sm text-gray-500">Total de pedidos</p>
+                        <p class="text-2xl font-bold text-indigo-700"><?= $total_pedidos ?></p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow p-4">
+                        <p class="text-sm text-gray-500">Abertos</p>
+                        <p class="text-2xl font-bold text-green-600"><?= $pedidos_abertos ?></p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow p-4">
+                        <p class="text-sm text-gray-500">Fechados</p>
+                        <p class="text-2xl font-bold text-gray-600"><?= $pedidos_fechados ?></p>
+                    </div>
+                </div>
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                     <h2 class="text-2xl font-bold"><?= $is_admin ? 'Centro de Pedidos' : 'Meus Pedidos' ?></h2>
+                    <div class="flex gap-2 w-full sm:w-auto">
+                        <input type="text" x-model="filtroPedidos" placeholder="Pesquisar por assunto..." class="border rounded-lg px-3 py-2 w-full sm:w-64">
+                    </div>
                     <?php if (!$is_admin): ?>
                         <button @click="aba = 'novo'" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">
                             <i class="fas fa-plus mr-1"></i> Novo Pedido
@@ -399,17 +507,29 @@ if (isset($_GET['pedido'])) {
                 </div>
                 <div class="grid gap-4">
                     <?php foreach($pedidos as $p): ?>
-                    <div class="bg-white rounded-xl shadow p-5 border-l-4 <?= $p['status'] === 'aberto' ? 'border-green-500' : 'border-gray-300' ?> hover:shadow-md transition">
+                    <?php
+                        $ultimoAutor = (int)($p['ultima_msg_user_id'] ?? 0);
+                        $ultimoMomento = $p['ultima_msg_em'] ?? null;
+                        $lidoEm = $_SESSION['pedidos_lidos'][$p['id']] ?? null;
+                        $naoLido = $ultimoMomento && $ultimoAutor !== (int)$user_id && (!$lidoEm || strtotime($ultimoMomento) > strtotime($lidoEm));
+                    ?>
+                    <div x-show="matchesPedido('<?= htmlspecialchars(strtolower($p['assunto']), ENT_QUOTES) ?>')" class="bg-white rounded-xl shadow p-5 border-l-4 <?= $p['status'] === 'aberto' ? 'border-green-500' : 'border-gray-300' ?> hover:shadow-md transition">
                         <div class="flex flex-col sm:flex-row justify-between">
                             <div>
                                 <div class="flex gap-2 items-center mb-1">
                                     <span class="font-mono bg-gray-100 px-2 py-0.5 rounded text-sm">#<?=$p['id']?></span>
                                     <span class="text-xs <?=$p['status']==='aberto'?'bg-green-100 text-green-800':'bg-gray-100 text-gray-600'?> px-2 py-0.5 rounded-full"><?=$p['status']?></span>
+                                    <?php if($naoLido): ?>
+                                        <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Não lido</span>
+                                    <?php endif; ?>
                                     <?php if($is_admin): ?><span class="text-sm text-gray-500"><?=htmlspecialchars($p['user_nome']??'Visitante')?></span><?php endif; ?>
                                 </div>
                                 <p class="font-semibold"><?=htmlspecialchars($p['assunto'])?></p>
                                 <p class="text-sm text-gray-600 truncate max-w-xs"><?=htmlspecialchars(substr($p['mensagem'],0,80))?>...</p>
                                 <p class="text-xs text-gray-400 mt-1"><?=$p['msgs']?> mensagens • <?=date('d/m/Y',strtotime($p['criado_em']))?></p>
+                                <?php if($p['status']==='aberto' && !empty($p['ultima_msg_em']) && (time()-strtotime($p['ultima_msg_em'])) > 4*3600): ?>
+                                    <p class="text-xs text-amber-600 mt-1"><i class="fas fa-clock"></i> SLA alerta: sem resposta há mais de 4h</p>
+                                <?php endif; ?>
                             </div>
                             <div class="flex gap-2 mt-3 sm:mt-0 items-center">
                                 <a href="?pedido=<?=$p['id']?>" class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600 transition">Abrir</a>
@@ -457,11 +577,45 @@ if (isset($_GET['pedido'])) {
         </div>
 
         <!-- Aba Perfil -->
-        <div x-show="aba === 'perfil'" class="max-w-lg mx-auto bg-white p-6 rounded-2xl shadow">
-            <h2 class="text-2xl font-bold mb-4">Perfil</h2>
-            <p><strong>Nome:</strong> <?=htmlspecialchars($_SESSION['user_nome'])?></p>
-            <p><strong>Email:</strong> <?=htmlspecialchars($_SESSION['user_email'])?></p>
-            <p class="text-sm text-gray-500 mt-4">Edição de perfil em desenvolvimento.</p>
+        <div x-show="aba === 'perfil'" class="max-w-3xl mx-auto space-y-6">
+            <div class="bg-white p-6 rounded-2xl shadow">
+                <h2 class="text-2xl font-bold mb-4">Perfil</h2>
+                <form method="POST" action="dashboard.php" class="space-y-4">
+                    <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
+                    <div>
+                        <label class="block font-medium mb-1">Nome</label>
+                        <input type="text" name="nome" required value="<?=htmlspecialchars($_SESSION['user_nome'])?>" class="w-full border p-3 rounded-xl">
+                    </div>
+                    <div>
+                        <label class="block font-medium mb-1">Email</label>
+                        <input type="email" name="email" required value="<?=htmlspecialchars($_SESSION['user_email'])?>" class="w-full border p-3 rounded-xl">
+                    </div>
+                    <button type="submit" name="atualizar_perfil" class="bg-indigo-600 text-white px-6 py-2 rounded-xl hover:bg-indigo-700 transition">
+                        Guardar alterações
+                    </button>
+                </form>
+            </div>
+            <div class="bg-white p-6 rounded-2xl shadow">
+                <h3 class="text-xl font-semibold mb-4">Segurança</h3>
+                <form method="POST" action="dashboard.php" class="space-y-4">
+                    <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
+                    <div>
+                        <label class="block font-medium mb-1">Password atual</label>
+                        <input type="password" name="password_atual" required class="w-full border p-3 rounded-xl">
+                    </div>
+                    <div>
+                        <label class="block font-medium mb-1">Nova password</label>
+                        <input type="password" name="password_nova" minlength="8" required class="w-full border p-3 rounded-xl">
+                    </div>
+                    <div>
+                        <label class="block font-medium mb-1">Confirmar nova password</label>
+                        <input type="password" name="password_confirmar" minlength="8" required class="w-full border p-3 rounded-xl">
+                    </div>
+                    <button type="submit" name="alterar_password" class="bg-gray-900 text-white px-6 py-2 rounded-xl hover:bg-black transition">
+                        Alterar password
+                    </button>
+                </form>
+            </div>
         </div>
 
         <!-- Aba Artigos (admin) -->
@@ -676,7 +830,7 @@ if (isset($_GET['pedido'])) {
 
 <!-- Chat (modal) -->
 <?php if ($pedido_atual): ?>
-<div x-data="chat(<?= $pedido_atual['id'] ?>)">
+<div x-data="chat(<?= $pedido_atual['id'] ?>)" x-init="init()">
     <div x-show="!minimizado" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-2 md:p-4">
         <div class="bg-white rounded-2xl w-full max-w-3xl h-[95vh] md:h-[85vh] flex flex-col shadow-2xl">
             <div class="bg-gradient-to-r from-indigo-600 to-indigo-700 text-white p-4 flex justify-between items-center">
@@ -712,6 +866,11 @@ if (isset($_GET['pedido'])) {
                             <?=htmlspecialchars($msg['autor_nome']??'Sistema')?> • <?=date('d/m H:i',strtotime($msg['criado_em']))?>
                         </div>
                         <div><?=nl2br(htmlspecialchars($msg['mensagem']))?></div>
+                        <?php if($meu): ?>
+                            <div class="text-[11px] <?=$meu?'text-indigo-200':'text-gray-500'?> mt-1">
+                                <?= !empty($mensagens_lidas_por_outros[$msg['id']]) ? '✓✓ Lida' : '✓ Enviada' ?>
+                            </div>
+                        <?php endif; ?>
                         <?php if($msg['anexo']): ?>
                             <div class="mt-2">
                                 <?php $ext = strtolower(pathinfo($msg['anexo'], PATHINFO_EXTENSION)); ?>
@@ -736,6 +895,15 @@ if (isset($_GET['pedido'])) {
                 <div class="flex gap-2 items-end">
                     <div class="flex-1">
                         <textarea x-ref="mensagemInput" name="mensagem" rows="2" class="w-full border rounded-xl p-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Responder..." required></textarea>
+                        <div class="mt-2">
+                            <label class="text-xs text-gray-500">Resposta rápida</label>
+                            <select @change="$refs.mensagemInput.value = $event.target.value" class="w-full border rounded-lg p-2 text-sm">
+                                <option value="">Selecionar template...</option>
+                                <option>Olá! Recebemos o seu pedido e estamos a analisar. Respondemos em breve.</option>
+                                <option>Obrigado pelo contacto. Precisamos de mais detalhes para avançar com a análise.</option>
+                                <option>Pedido concluído com sucesso. Caso precise, estamos disponíveis para ajustes.</option>
+                            </select>
+                        </div>
                         <div class="mt-2" x-data="anexo()" x-ref="anexoComponent">
                             <div class="drop-zone p-2" :class="{ 'drag': arrastando }" @dragover.prevent="arrastando = true" @dragleave.prevent="arrastando = false" @drop.prevent="largar($event)">
                                 <div class="flex items-center gap-2 flex-wrap">
