@@ -1,8 +1,8 @@
 <?php
-$host = 'localhost';
-$db   = 'oo4eepvg_dev3';
-$user = 'oo4eepvg_dev3';
-$pass = 'Teste123@';
+$host = getenv('DB_HOST') ?: 'localhost';
+$db   = getenv('DB_NAME') ?: 'oo4eepvg_dev3';
+$user = getenv('DB_USER') ?: 'oo4eepvg_dev3';
+$pass = getenv('DB_PASS') ?: 'Teste123@';
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass, [
@@ -57,6 +57,28 @@ function inicializarBaseDados($pdo) {
         FOREIGN KEY (contacto_id) REFERENCES contactos(id) ON DELETE CASCADE,
         FOREIGN KEY (user_id) REFERENCES utilizadores(id) ON DELETE SET NULL,
         INDEX idx_contacto (contacto_id, criado_em ASC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS mensagens_lidas (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        mensagem_id INT NOT NULL,
+        user_id INT NOT NULL,
+        lido_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_msg_user (mensagem_id, user_id),
+        FOREIGN KEY (mensagem_id) REFERENCES mensagens_contacto(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES utilizadores(id) ON DELETE CASCADE,
+        INDEX idx_user_lido (user_id, lido_em DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS templates_resposta (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        titulo VARCHAR(120) NOT NULL,
+        conteudo TEXT NOT NULL,
+        ativo TINYINT(1) DEFAULT 1,
+        criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES utilizadores(id) ON DELETE CASCADE,
+        INDEX idx_user_ativo (user_id, ativo)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS artigos (
