@@ -158,11 +158,14 @@ function chat(contactoId) {
             let formData = new FormData(this.$el);
             formData.append('ajax', '1');
             const texto = (this.$refs.mensagemInput.value || '').trim();
+            const anexo = formData.get('anexo');
+            const temAnexo = anexo && anexo.size && anexo.size > 0;
             const tempId = 'tmp_' + Date.now();
             if (texto) {
-                const pendingHtml = `<div id="${tempId}" class="flex justify-end opacity-70"><div class="chat-msg bg-indigo-400 text-white rounded-t-2xl rounded-bl-2xl p-3"><div class="text-xs text-indigo-100 mb-1">A enviar... • agora</div><div>${texto.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div></div></div>`;
+                const pendingHtml = `<div id="${tempId}" class="flex justify-end opacity-80"><div class="chat-msg bg-indigo-500 text-white rounded-t-2xl rounded-bl-2xl p-3"><div class="text-xs text-indigo-200 mb-1">Tu • agora <span data-status-icon><i class="fas fa-clock"></i></span></div><div>${texto.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div><div class="text-[11px] text-indigo-200 mt-1" data-status-text>A enviar…</div></div></div>`;
                 this.$refs.msgContainer.insertAdjacentHTML('beforeend', pendingHtml);
                 this.scroll();
+                this.$refs.mensagemInput.value = '';
             }
             try {
                 let resp = await fetch('dashboard.php', { method: 'POST', body: formData, credentials: 'same-origin' });
@@ -181,10 +184,17 @@ function chat(contactoId) {
                     alert(data.erro); 
                 } else {
                     const tmpEl = document.getElementById(tempId);
-                    if (tmpEl) tmpEl.remove();
-                    this.$refs.msgContainer.insertAdjacentHTML('beforeend', data.html);
-                    this.scroll();
-                    this.$refs.mensagemInput.value = '';
+                    if (tmpEl && !temAnexo) {
+                        tmpEl.classList.remove('opacity-80');
+                        const iconEl = tmpEl.querySelector('[data-status-icon]');
+                        const statusEl = tmpEl.querySelector('[data-status-text]');
+                        if (iconEl) iconEl.innerHTML = '<i class="fas fa-check"></i>';
+                        if (statusEl) statusEl.textContent = 'Enviado';
+                    } else {
+                        if (tmpEl) tmpEl.remove();
+                        this.$refs.msgContainer.insertAdjacentHTML('beforeend', data.html);
+                        this.scroll();
+                    }
                     if (this.$refs.anexoComponent && this.$refs.anexoComponent.remover) {
                         this.$refs.anexoComponent.remover();
                     }
