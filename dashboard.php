@@ -318,6 +318,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirecionar('dashboard.php?aba=artigos');
     }
 
+    if ($is_admin && isset($_POST['criar_template'])) {
+        $titulo = trim($_POST['template_titulo'] ?? '');
+        $conteudo = trim($_POST['template_conteudo'] ?? '');
+        if ($titulo !== '' && $conteudo !== '') {
+            $pdo->prepare("INSERT INTO templates_resposta (user_id, titulo, conteudo, ativo) VALUES (?, ?, ?, 1)")
+                ->execute([$user_id, $titulo, $conteudo]);
+            flash('sucesso', 'Template criado.');
+        } else {
+            flash('erro', 'Preencha título e conteúdo do template.');
+        }
+        redirecionar('dashboard.php?aba=templates');
+    }
+
+    if ($is_admin && isset($_POST['apagar_template'])) {
+        $tplId = (int)($_POST['template_id'] ?? 0);
+        $pdo->prepare("DELETE FROM templates_resposta WHERE id = ? AND user_id = ?")->execute([$tplId, $user_id]);
+        flash('sucesso', 'Template removido.');
+        redirecionar('dashboard.php?aba=templates');
+    }
+
     // Eliminar artigo
     if ($is_admin && isset($_GET['eliminar_artigo'])) {
         $artigo_id = $_GET['eliminar_artigo'];
@@ -398,6 +418,16 @@ $pedidos_abertos = count(array_filter($pedidos, function ($p) {
     return (isset($p['status']) ? $p['status'] : '') === 'aberto';
 }));
 $pedidos_fechados = max(0, $total_pedidos - $pedidos_abertos);
+$templates_resposta = [];
+if ($is_admin) {
+    try {
+        $stmt = $pdo->prepare("SELECT id, titulo, conteudo FROM templates_resposta WHERE user_id = ? AND ativo = 1 ORDER BY id DESC");
+        $stmt->execute([$user_id]);
+        $templates_resposta = $stmt->fetchAll();
+    } catch (Exception $e) {
+        error_log('Falha ao carregar templates: ' . $e->getMessage());
+    }
+}
 
 $pedido_atual = null;
 $mensagens    = [];
@@ -475,6 +505,9 @@ if (isset($_GET['pedido'])) {
             <?php if ($is_admin): ?>
                 <button @click="aba = 'artigos'; sidebar = false" :class="aba === 'artigos' ? 'bg-indigo-700' : ''" class="w-full text-left p-3 rounded-xl hover:bg-indigo-700 flex gap-2 transition">
                     <i class="fas fa-newspaper w-5"></i> Artigos
+                </button>
+                <button @click="aba = 'templates'; sidebar = false" :class="aba === 'templates' ? 'bg-indigo-700' : ''" class="w-full text-left p-3 rounded-xl hover:bg-indigo-700 flex gap-2 transition">
+                    <i class="fas fa-bolt w-5"></i> Templates
                 </button>
             <?php endif; ?>
         </nav>
@@ -644,6 +677,30 @@ if (isset($_GET['pedido'])) {
 
         <!-- Aba Artigos (admin) -->
         <?php if ($is_admin): ?>
+        <div x-show="aba === 'templates'" class="max-w-4xl mx-auto bg-white p-6 rounded-2xl shadow mb-6">
+            <h2 class="text-2xl font-bold mb-4">Templates de Resposta</h2>
+            <form method="POST" class="space-y-3 mb-6">
+                <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
+                <input type="text" name="template_titulo" placeholder="Título" class="w-full border p-2 rounded-lg" required>
+                <textarea name="template_conteudo" rows="3" placeholder="Conteúdo" class="w-full border p-2 rounded-lg" required></textarea>
+                <button name="criar_template" class="bg-indigo-600 text-white px-4 py-2 rounded-lg">Guardar template</button>
+            </form>
+            <div class="space-y-2">
+                <?php foreach($templates_resposta as $tpl): ?>
+                    <div class="border rounded-lg p-3 flex justify-between gap-3">
+                        <div>
+                            <p class="font-semibold"><?=htmlspecialchars($tpl['titulo'])?></p>
+                            <p class="text-sm text-gray-600"><?=htmlspecialchars($tpl['conteudo'])?></p>
+                        </div>
+                        <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?=$csrf_token?>">
+                            <input type="hidden" name="template_id" value="<?=$tpl['id']?>">
+                            <button name="apagar_template" class="text-red-600">Apagar</button>
+                        </form>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
         <div x-show="aba === 'artigos'" class="max-w-6xl mx-auto">
             <div class="flex justify-between items-center mb-6">
                 <h2 class="text-2xl font-bold">Artigos</h2>
@@ -872,9 +929,11 @@ if (isset($_GET['pedido'])) {
                         </button>
                     </form>
                     <?php endif; ?>
-                    <button @click="minimizado = true" class="bg-white/20 rounded-full p-2 hover:bg-white/30 transition">
-                        <i class="fas fa-window-minimize"></i>
-                    </button>
+                    <?php if($is_admin): ?>
+                        <button @click="minimizado = true" class="bg-white/20 rounded-full p-2 hover:bg-white/30 transition" title="Minimizar conversa">
+                            <i class="fas fa-window-minimize"></i>
+                        </button>
+                    <?php endif; ?>
                     <a href="dashboard.php" class="bg-white/20 rounded-full p-2 hover:bg-white/30 transition">
                         <i class="fas fa-times"></i>
                     </a>
@@ -919,15 +978,17 @@ if (isset($_GET['pedido'])) {
                 <div class="flex gap-2 items-end">
                     <div class="flex-1">
                         <textarea x-ref="mensagemInput" name="mensagem" rows="2" class="w-full border rounded-xl p-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Responder..." required></textarea>
-                        <div class="mt-2">
-                            <label class="text-xs text-gray-500">Resposta rápida</label>
-                            <select @change="$refs.mensagemInput.value = $event.target.value" class="w-full border rounded-lg p-2 text-sm">
-                                <option value="">Selecionar template...</option>
-                                <option>Olá! Recebemos o seu pedido e estamos a analisar. Respondemos em breve.</option>
-                                <option>Obrigado pelo contacto. Precisamos de mais detalhes para avançar com a análise.</option>
-                                <option>Pedido concluído com sucesso. Caso precise, estamos disponíveis para ajustes.</option>
-                            </select>
-                        </div>
+                        <?php if($is_admin): ?>
+                            <div class="mt-2">
+                                <label class="text-xs text-gray-500">Resposta rápida (admin)</label>
+                                <select @change="$refs.mensagemInput.value = $event.target.value" class="w-full border rounded-lg p-2 text-sm">
+                                    <option value="">Selecionar template...</option>
+                                    <?php foreach($templates_resposta as $tpl): ?>
+                                        <option value="<?=htmlspecialchars($tpl['conteudo'])?>"><?=htmlspecialchars($tpl['titulo'])?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                        <?php endif; ?>
                         <div class="mt-2" x-data="anexo()" x-ref="anexoComponent">
                             <div class="drop-zone p-2" :class="{ 'drag': arrastando }" @dragover.prevent="arrastando = true" @dragleave.prevent="arrastando = false" @drop.prevent="largar($event)">
                                 <div class="flex items-center gap-2 flex-wrap">
@@ -952,7 +1013,11 @@ if (isset($_GET['pedido'])) {
                         <i class="fas fa-spinner fa-spin" x-show="enviando"></i>
                     </button>
                 </div>
-                <p x-show="enviando" class="text-xs text-gray-500 mt-2">A enviar mensagem...</p>
+                <?php if(!$is_admin): ?>
+                    <div class="mt-3 flex justify-end">
+                        <a href="dashboard.php" class="text-sm text-indigo-600 hover:underline"><i class="fas fa-arrow-left mr-1"></i>Voltar à lista de pedidos</a>
+                    </div>
+                <?php endif; ?>
             </form>
         </div>
     </div>
