@@ -4,7 +4,13 @@ function dashboard() {
         sidebar: false,
         largura: window.innerWidth,
         modalReabrir: false,
-        reabrirId: null
+        reabrirId: null,
+        filtroPedidos: '',
+        matchesPedido(assunto) {
+            const q = (this.filtroPedidos || '').trim().toLowerCase();
+            if (!q) return true;
+            return (assunto || '').includes(q);
+        }
     }
 }
 
