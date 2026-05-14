@@ -4,7 +4,13 @@ function dashboard() {
         sidebar: false,
         largura: window.innerWidth,
         modalReabrir: false,
-        reabrirId: null
+        reabrirId: null,
+        filtroPedidos: '',
+        matchesPedido(assunto) {
+            const q = (this.filtroPedidos || '').trim().toLowerCase();
+            if (!q) return true;
+            return (assunto || '').includes(q);
+        }
     }
 }
 
@@ -141,6 +147,20 @@ function chat(contactoId) {
     return {
         minimizado: false,
         enviando: false,
+        lastMsgId: 0,
+        sse: null,
+        init() {
+            const msgs = this.$refs.msgContainer ? this.$refs.msgContainer.querySelectorAll('.chat-msg') : [];
+            this.lastMsgId = msgs.length;
+            this.sse = new EventSource(`dashboard_stream.php?contacto_id=${contactoId}&last_id=${this.lastMsgId}`);
+            this.sse.addEventListener('mensagem', (ev) => {
+                const d = JSON.parse(ev.data || '{}');
+                if (!d.mensagem) return;
+                const html = `<div class=\"flex justify-start\"><div class=\"chat-msg bg-white border rounded-t-2xl rounded-br-2xl shadow p-3\"><div class=\"text-xs text-gray-500 mb-1\">Nova mensagem • agora</div><div>${String(d.mensagem).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div></div></div>`;
+                this.$refs.msgContainer.insertAdjacentHTML('beforeend', html);
+                this.scroll();
+            });
+        },
         scroll() {
             this.$nextTick(() => {
                 let el = this.$refs.msgContainer;
@@ -151,6 +171,16 @@ function chat(contactoId) {
             this.enviando = true;
             let formData = new FormData(this.$el);
             formData.append('ajax', '1');
+            const texto = (this.$refs.mensagemInput.value || '').trim();
+            const anexo = formData.get('anexo');
+            const temAnexo = anexo && anexo.size && anexo.size > 0;
+            const tempId = 'tmp_' + Date.now();
+            if (texto) {
+                const pendingHtml = `<div id="${tempId}" class="flex justify-end opacity-80"><div class="chat-msg bg-indigo-500 text-white rounded-t-2xl rounded-bl-2xl p-3"><div class="text-xs text-indigo-200 mb-1">Tu • agora <span data-status-icon><i class="fas fa-clock"></i></span></div><div>${texto.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div><div class="text-[11px] text-indigo-200 mt-1" data-status-text>A enviar…</div></div></div>`;
+                this.$refs.msgContainer.insertAdjacentHTML('beforeend', pendingHtml);
+                this.scroll();
+                this.$refs.mensagemInput.value = '';
+            }
             try {
                 let resp = await fetch('dashboard.php', { method: 'POST', body: formData, credentials: 'same-origin' });
                 if (!resp.ok) throw new Error('Erro HTTP: ' + resp.status);
@@ -163,16 +193,29 @@ function chat(contactoId) {
                     throw new Error('Resposta do servidor inválida'); 
                 }
                 if (data.erro) { 
+                    const tmpEl = document.getElementById(tempId);
+                    if (tmpEl) tmpEl.remove();
                     alert(data.erro); 
                 } else {
-                    this.$refs.msgContainer.insertAdjacentHTML('beforeend', data.html);
-                    this.scroll();
-                    this.$refs.mensagemInput.value = '';
+                    const tmpEl = document.getElementById(tempId);
+                    if (tmpEl && !temAnexo) {
+                        tmpEl.classList.remove('opacity-80');
+                        const iconEl = tmpEl.querySelector('[data-status-icon]');
+                        const statusEl = tmpEl.querySelector('[data-status-text]');
+                        if (iconEl) iconEl.innerHTML = '<i class="fas fa-check"></i>';
+                        if (statusEl) statusEl.textContent = 'Enviado';
+                    } else {
+                        if (tmpEl) tmpEl.remove();
+                        this.$refs.msgContainer.insertAdjacentHTML('beforeend', data.html);
+                        this.scroll();
+                    }
                     if (this.$refs.anexoComponent && this.$refs.anexoComponent.remover) {
                         this.$refs.anexoComponent.remover();
                     }
                 }
             } catch (e) { 
+                const tmpEl = document.getElementById(tempId);
+                if (tmpEl) tmpEl.remove();
                 console.error(e); 
                 alert('Erro de conexão.'); 
             }
