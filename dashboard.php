@@ -888,6 +888,7 @@ if (isset($_GET['pedido'])) {
                         <i class="fas fa-spinner fa-spin" x-show="enviando"></i>
                     </button>
                 </div>
+                <p x-show="enviando" class="text-xs text-gray-500 mt-2">A enviar mensagem...</p>
             </form>
         </div>
     </div>
