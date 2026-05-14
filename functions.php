@@ -188,9 +188,9 @@ function fazerUploadImagensArtigo($ficheiro, $artigo_id) {
     $dir = "uploads/artigos/$artigo_id/";
     if (!is_dir($dir)) {
         if (!mkdir($dir, 0755, true)) return false;
-        $thumbDir = $dir . 'thumbs/';
-        if (!mkdir($thumbDir, 0755, true)) error_log("Falha ao criar thumbs: $thumbDir");
     }
+    $thumbDir = $dir . 'thumbs/';
+    if (!is_dir($thumbDir) && !mkdir($thumbDir, 0755, true)) error_log("Falha ao criar thumbs: $thumbDir");
     $maximo = 5 * 1024 * 1024;
     if ($ficheiro['size'] > $maximo) { error_log("Imagem excede 5MB: " . $ficheiro['name']); return false; }
     if (!is_uploaded_file($ficheiro['tmp_name'])) { error_log("Não é upload: " . $ficheiro['name']); return false; }

@@ -147,6 +147,7 @@ function chat(contactoId) {
     return {
         minimizado: false,
         enviando: false,
+        enviosPendentes: 0,
         lastMsgId: 0,
         sse: null,
         init() {
@@ -168,7 +169,8 @@ function chat(contactoId) {
             });
         },
         async enviarMensagem() {
-            this.enviando = true;
+            this.enviosPendentes++;
+            this.enviando = this.enviosPendentes > 0;
             let formData = new FormData(this.$el);
             formData.append('ajax', '1');
             const texto = (this.$refs.mensagemInput.value || '').trim();
@@ -219,7 +221,8 @@ function chat(contactoId) {
                 console.error(e); 
                 alert('Erro de conexão.'); 
             }
-            this.enviando = false;
+            this.enviosPendentes = Math.max(0, this.enviosPendentes - 1);
+            this.enviando = this.enviosPendentes > 0;
         }
     }
 }

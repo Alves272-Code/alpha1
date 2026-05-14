@@ -430,6 +430,9 @@ if ($is_admin) {
     }
 }
 foreach ($pedidos as $pp) {
+    if (($pp['ultima_msg_user_id'] ?? null) && (int)$pp['ultima_msg_user_id'] !== (int)$user_id && ($pp['status'] ?? '') === 'aberto') {
+        $notificacoesTopo[] = "Tem nova resposta no pedido #{$pp['id']}.";
+    }
     if (($pp['status'] ?? '') === 'aberto' && !empty($pp['ultima_msg_em']) && (time()-strtotime($pp['ultima_msg_em'])) > 4*3600) {
         $notificacoesTopo[] = "Pedido #{$pp['id']} está sem resposta há mais de 4h.";
     }
@@ -1033,7 +1036,7 @@ if (isset($_GET['pedido'])) {
                             </div>
                         </div>
                     </div>
-                    <button type="submit" class="bg-indigo-600 text-white rounded-xl px-5 py-4 md:py-3 min-h-[52px] flex items-center justify-center flex-shrink-0 hover:bg-indigo-700 transition text-base font-semibold" :disabled="enviando">
+                    <button type="submit" class="bg-indigo-600 text-white rounded-xl px-5 py-4 md:py-3 min-h-[52px] flex items-center justify-center flex-shrink-0 hover:bg-indigo-700 transition text-base font-semibold">
                         <span x-show="!enviando">Enviar</span>
                         <span x-show="enviando"><i class="fas fa-spinner fa-spin mr-1"></i> Enviando</span>
                     </button>
